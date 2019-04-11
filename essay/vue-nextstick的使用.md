@@ -1,4 +1,5 @@
 ### 使用nextstick进行异步的实现
+
 #### 简单的来说  nextstick的实现其实与settimeout的实现的效果相似，但是在vue中间更加推崇的是前者
 > 常见的出现的场所是
 
@@ -72,3 +73,6 @@ resolvedPromiseThen
 ```
 
 > 执行的顺序: promise1 -> promise2 -> resolvePromise resolved -> promise3
+主要是'resolvePromise resolved'的出现在两个promise(then)中间，导致问题的出现
+
+> Promise.resolve()的执行优先级要高于new Promise()
