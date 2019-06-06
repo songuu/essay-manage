@@ -2,7 +2,12 @@
 #### 主要是用在主题的切换，文本的语言的切换
 
 > 代码的实现
+
 ```
+<html>
+
+<head>
+<style type="text/css">
 .con{
     padding: 100px;
     background: #fff;
@@ -24,8 +29,8 @@
     background: #5270f8;
     color: #fff;
 }
-
-</style>
+<style>
+</head>
 <body>
     <div id="red"></div>
     <div id="green"></div>
