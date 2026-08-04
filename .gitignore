@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+coverage/
+dist/
+.env
+.env.local
+.env.production
+*.log
+content/article-manifest.local.json
+*.tsbuildinfo

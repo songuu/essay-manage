@@ -1,0 +1,86 @@
+name: essay-manage
+
+x-runtime-env: &runtime-env
+  env_file:
+    - "${ESSAY_ENV_FILE:-./.env.production}"
+
+services:
+  db:
+    # This immutable digest is the PostgreSQL 17 layer already used on the production host.
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    restart: unless-stopped
+    <<: *runtime-env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - PGPASSWORD="$$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc 'SELECT 1' | grep -qx 1
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    stop_grace_period: 30s
+    networks:
+      - backend
+
+  migrator:
+    image: "${ESSAY_IMAGE:-essay-manage:local}"
+    restart: "no"
+    <<: *runtime-env
+    environment:
+      NODE_ENV: production
+    command: ["node", "dist/db-deploy.mjs"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+
+  app:
+    image: "${ESSAY_IMAGE:-essay-manage:local}"
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        APP_VERSION: "${ESSAY_IMAGE_TAG:-local}"
+    restart: unless-stopped
+    init: true
+    <<: *runtime-env
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    ports:
+      - target: 3000
+        published: "${ESSAY_APP_PORT:-3200}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/essay/api/health/').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    stop_grace_period: 30s
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+    name: essay-manage-postgres-data
+
+networks:
+  backend:
+    name: essay-manage-backend
+
