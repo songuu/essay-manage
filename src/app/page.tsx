@@ -44,14 +44,14 @@ export default async function ArchivePage({ searchParams }: { searchParams: Sear
         <div className="archive-hero__copy">
           <p className="hero-eyebrow">
             <span>ENGINEERING NOTES</span>
-            <span>2019—2020</span>
+            <span>2019—2020 · 2026 校订</span>
           </p>
           <h1 id="archive-title">
             经验写下来，
             <em>才能被再次使用。</em>
           </h1>
           <p className="archive-hero__lead">
-            关于 JavaScript、工程实践与产品构建的个人技术档案。保留原始 Markdown 的思考痕迹，也让每一次检索更快抵达答案。
+            关于 JavaScript、工程实践与产品构建的个人技术档案。保留原始 Markdown 的思考痕迹；原文已按官方资料逐篇校订，让每一次检索更快抵达答案。
           </p>
           <a className="hero-action" href="#archive-heading">
             浏览文章 <span aria-hidden="true">↓</span>

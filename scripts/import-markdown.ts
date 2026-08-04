@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type {
-  ArticleMetadata,
-  ArticleStatus,
+import {
+  normalizeMarkdownContent,
+  type ArticleMetadata,
+  type ArticleStatus,
 } from "../src/lib/content/metadata";
 import {
   createDatabaseClient,
@@ -198,7 +199,9 @@ async function loadArticles(
       let contentMarkdown: string;
 
       try {
-        contentMarkdown = await readFile(absolutePath, "utf8");
+        contentMarkdown = normalizeMarkdownContent(
+          await readFile(absolutePath, "utf8"),
+        );
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         throw new Error(`读取 Markdown 失败 (${metadata.sourcePath}): ${detail}`);

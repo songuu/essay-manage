@@ -41,6 +41,7 @@ export function ArticleCard({ article, index }: ArticleCardProps) {
         <ArticleMeta
           publishedAt={article.publishedAt}
           sourceUpdatedAt={article.sourceUpdatedAt}
+          showUpdated
           readingMinutes={article.readingMinutes}
         />
         <Link className="article-card__read" href={`/${article.slug}`}>

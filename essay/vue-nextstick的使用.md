@@ -1,78 +1,107 @@
-### 使用nextstick进行异步的实现
+# Vue 3 nextTick：只在需要更新后 DOM 时等待
 
-#### 简单的来说  nextstick的实现其实与settimeout的实现的效果相似，但是在vue中间更加推崇的是前者
-> 常见的出现的场所是
+适用范围：Vue 3 Composition API 中需要在响应式状态变更后聚焦元素、读取布局或滚动容器的场景；关键原则：nextTick 等待的是 Vue 已排队的 DOM 更新，不是网络、动画或任意异步任务。本文用 script setup 展示安全用法，并说明何时应改用模板、watch 的 flush 选项或生命周期钩子。
 
-```
-1:通过父组件的更新来实现子组件的更新
-在父组件中间获取子组件的数据，然后到子组件中间去使用，但是在传递过程中间会进入任务队列中，此时如果不适用异步操作就会出现，使子组件拿不到数据
-2:和promise的同时使用
-```
+## 为什么状态已改，DOM 还没变
 
-#### 现在出现的问题(从v8引擎后面)
+Vue 会合并同一轮同步代码中的响应式变更，再统一更新 DOM。这能避免一次用户操作触发多次无意义渲染，也意味着下面的赋值后立刻读取由 v-if 创建的元素，可能读到旧 DOM 或空引用。
 
-```
-async function async1(){
-    console.log('async1 start')
-    await async2()
-    console.log('async1 end')
+nextTick 返回一个 Promise；在状态变更后等待它，可以在本轮组件 DOM 更新完成后继续操作。它不保证图片加载、CSS 过渡结束、子系统请求完成，也不应该被用作掩盖数据流问题的延迟工具。
+
+## 现代代码示例：打开编辑器后聚焦输入框
+
+~~~vue
+<script setup lang="ts">
+import { nextTick, ref } from 'vue'
+
+const editing = ref(false)
+const titleInput = ref<HTMLInputElement | null>(null)
+
+async function openEditor() {
+  editing.value = true
+  await nextTick()
+  titleInput.value?.focus()
 }
-async function async2(){
-    console.log('async2')
+
+function closeEditor() {
+  editing.value = false
 }
-console.log('script start')
-setTimeout(function(){
-    console.log('setTimeout') 
-},0)  
-async1();
-new Promise(function(resolve){
-    console.log('promise1')
-    resolve();
-}).then(function(){
-    console.log('promise2')
-})
-console.log('script end')
-```
+</script>
 
->1 输出的顺序为: script start  ->  async1 start ->  async2  -> promise1 -> async1 end  -> promise2  -> setTimeout
->2 输出的顺序为：script start  ->  async1 start ->  async2  -> promise1 -> promise2 -> async1 end  -> setTimeout(v8引擎及之后)
+<template>
+  <button v-if="!editing" type="button" @click="openEditor">
+    编辑标题
+  </button>
 
-出现这种问题的原因是：
-```
-async function() {
-	await p
-	console.log(1)
+  <section v-else>
+    <label>
+      标题
+      <input ref="titleInput" type="text">
+    </label>
+    <button type="button" @click="closeEditor">完成</button>
+  </section>
+</template>
+~~~
+
+这里等待的原因很具体：输入框由 v-if 创建，只有更新后的 DOM 才能聚焦。若元素始终存在且只改变样式，通常不需要 nextTick。
+
+## 响应数据后滚动：考虑 post-flush watcher
+
+当操作由某个响应式值变化驱动，并且必须读取更新后的列表尺寸时，用 post-flush watcher 可以让时机与意图写在一起。
+
+~~~vue
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+
+type Message = { id: string; body: string }
+
+const messages = ref<Message[]>([])
+const messageList = ref<HTMLElement | null>(null)
+
+watch(
+  messages,
+  () => {
+    const element = messageList.value
+    if (!element) return
+    element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+  },
+  { flush: 'post', deep: true },
+)
+
+function appendMessage(body: string) {
+  messages.value.push({ id: crypto.randomUUID(), body })
 }
-常见的解析方法
+</script>
 
-1.Promise.resolve(p).then(() =>  {console.log(1)})  此时的p事件，就会直接出现在队列的末尾，当promise对象执行之后，马上就会去执行then里面的函数
-2.new Promise((resolve) => {resolve(p)}).then(() => {console.log(1)})  v8之前的就会新建一个Promise对象  此时就会直接进入最新的resolve阶段，不会在then之后直接执行
-```
+<template>
+  <div ref="messageList" class="message-list">
+    <p v-for="message in messages" :key="message.id">{{ message.body }}</p>
+  </div>
+  <button type="button" @click="appendMessage('你好')">添加消息</button>
+</template>
+~~~
 
-但是现在主要的的引擎还是v8以上，而且await的解析还是以Promise.resolve()
+这个例子要注意：deep watch 适合确实需要观察数组内部变动的场景；如果能以不可变方式替换数组，或只监听长度、最后一项等更小的依赖，更新范围会更清晰。
 
-**promise例题**
-```
-let resolvePromise = new Promise(resolve => {
-  let resolvedPromise = Promise.resolve()
-  resolve(resolvedPromise)
-})
-resolvePromise.then(() => {
-  console.log('resolvePromise resolved')
-})
-let resolvedPromiseThen = Promise.resolve().then(res => {
-  console.log('promise1')
-})
-resolvedPromiseThen
-  .then(() => {
-    console.log('promise2')
-  })
-  .then(() => {
-    console.log('promise3')
-  })
-```
+## 与其他时机工具的边界
 
-> 执行的顺序: promise1 -> promise2 -> resolvePromise resolved -> promise3
-主要是'resolvePromise resolved'的出现在两个promise(then)中间，导致问题的出现
+- 初次挂载后的 DOM 初始化，使用 onMounted；无需为了“确保页面准备好”而在每处套 nextTick。
+- 仅计算展示数据时，使用 computed 或模板表达式；它们不需要等待 DOM。
+- 监听明确的输入变化时，使用 watch；自动收集多个响应式读取时，可使用 watchEffect，并注册必要的清理。
+- 需要等待图片、字体、过渡或远程数据时，监听对应的 load、transitionend、请求 Promise 或组件状态，而非把 nextTick 当通用等待器。
+- 服务端渲染没有浏览器 DOM，访问元素引用必须位于客户端可执行的边界。
 
-> Promise.resolve()的执行优先级要高于new Promise()
+## 常见误区与检查点
+
+- 连续多次调用 nextTick 通常说明状态更新和 DOM 操作没有被组织在同一处，应先收敛交互逻辑。
+- 在模板尚未渲染的条件分支上使用非空断言，容易在权限、加载或异常分支中出错；应保留空值处理。
+- 不要在更新后的 DOM 回调中再次无条件修改同一响应式来源，否则可能造成循环更新。
+- nextTick 只保证 Vue 的当前更新队列已刷新。第三方组件的内部异步渲染需要按其公开 API 协调。
+- 读取布局可能触发浏览器工作；批量读写、避免无谓的滚动和测量比单纯等待更重要。
+
+## 官方参考
+
+- [Vue：nextTick API](https://vuejs.org/api/general.html#nexttick)
+- [Vue：生命周期钩子](https://vuejs.org/guide/essentials/lifecycle.html)
+- [Vue：侦听器](https://vuejs.org/guide/essentials/watchers.html)
+- [Vue：模板引用](https://vuejs.org/guide/essentials/template-refs.html)

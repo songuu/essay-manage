@@ -116,6 +116,23 @@ async function main(): Promise<void> {
     return;
   }
 
+  try {
+    const stored = JSON.parse(
+      await readFile(manifestPath, "utf8"),
+    ) as ContentManifest;
+    const storedGeneratedAt = Date.parse(stored.generatedAt);
+    if (
+      Number.isFinite(storedGeneratedAt) &&
+      JSON.stringify(getComparableManifest(stored)) ===
+        JSON.stringify(getComparableManifest(expected))
+    ) {
+      console.log(`内容 manifest 无需更新：${stored.articles.length} 篇`);
+      return;
+    }
+  } catch {
+    // Missing or invalid generated output is replaced by the verified scan below.
+  }
+
   await mkdir(path.dirname(manifestPath), { recursive: true });
   await writeFile(manifestPath, serializeManifest(expected), "utf8");
   console.log(`已生成内容 manifest：${expected.articles.length} 篇`);

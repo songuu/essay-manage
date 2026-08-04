@@ -7,6 +7,7 @@ param(
   [string]$RemoteRoot = "/opt/essay-manage",
   [ValidateRange(1024, 65535)]
   [int]$AppPort = 3200,
+  [string]$SourceCommit = "",
 
   [switch]$RemoteBuild,
   [switch]$SkipTests,
@@ -42,7 +43,29 @@ function Invoke-Native([string]$File, [string[]]$Arguments) {
 }
 
 function Invoke-Remote([string]$Script) {
-  Invoke-Native "ssh" @("-o", "BatchMode=yes", $DeployHost, $Script)
+  Invoke-Native "ssh" @(
+    "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=yes",
+    $DeployHost,
+    $Script
+  )
+}
+
+function Assert-CommittedWorktree([string[]]$Pathspec) {
+  $arguments = @(
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+    "--"
+  ) + $Pathspec
+  $changes = @(& git @arguments)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to inspect Git worktree before production deployment."
+  }
+  if ($changes.Count -gt 0) {
+    $preview = ($changes | Select-Object -First 8) -join "; "
+    throw "Refusing to deploy uncommitted files. Commit changes first: $preview"
+  }
 }
 
 function Assert-SafeSettings {
@@ -60,6 +83,9 @@ function Assert-SafeSettings {
   }
   if ($ImageTag -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$') {
     throw "ImageTag is not a valid Docker tag. Received: $ImageTag"
+  }
+  if (-not $Rollback -and $SourceCommit -notmatch '^[a-f0-9]{40}$') {
+    throw "SourceCommit must be a full Git commit. Received: $SourceCommit"
   }
   if ($RemoteBuild -and $SkipImageBuild) {
     throw "-RemoteBuild and -SkipImageBuild cannot be used together."
@@ -123,6 +149,20 @@ $RemoteEnvFile = "$RemoteRoot/shared/.env.production"
 $ImageReference = "essay-manage:$ImageTag"
 $ProjectName = "essay-manage"
 
+if (-not $Rollback) {
+  $headOutput = @(& git rev-parse HEAD)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to resolve the current Git commit."
+  }
+  $headCommit = ($headOutput -join "").Trim()
+  if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
+    $SourceCommit = $headCommit
+  }
+  if ($SourceCommit -ne $headCommit) {
+    throw "SourceCommit must match the checked-out HEAD ($headCommit). Received: $SourceCommit"
+  }
+}
+
 Assert-SafeSettings
 Assert-RequiredLocalFiles
 
@@ -133,6 +173,9 @@ Write-Host ("  {0,-20} {1}" -f "Loopback", "127.0.0.1:$AppPort")
 Write-Host ("  {0,-20} {1}" -f "Release", $RemoteRelease)
 Write-Host ("  {0,-20} {1}" -f "Shared env", $RemoteEnvFile)
 Write-Host ("  {0,-20} {1}" -f "Image", $ImageReference)
+if (-not $Rollback) {
+  Write-Host ("  {0,-20} {1}" -f "Source commit", $SourceCommit)
+}
 Write-Host ("  {0,-20} {1}" -f "Image build", $(if ($RemoteBuild) { "remote (explicit)" } else { "local + scp/load" }))
 Write-Host ("  {0,-20} {1}" -f "Mode", $(if ($Rollback) { "rollback" } else { "deploy" }))
 
@@ -147,10 +190,18 @@ if ($DryRun) {
   return
 }
 
+if (-not $Rollback) {
+  Assert-CommittedWorktree @(".", ":(exclude)content/article-manifest.json")
+  Step "Generate and verify content manifest"
+  Invoke-Native "pnpm" @("content:manifest")
+  Invoke-Native "pnpm" @("content:verify")
+}
+
 $quotedRoot = Quote-BashValue $RemoteRoot
 $quotedEnv = Quote-BashValue $RemoteEnvFile
 $quotedProject = Quote-BashValue $ProjectName
 $quotedPort = Quote-BashValue ([string]$AppPort)
+$quotedSourceCommit = if ($Rollback) { "''" } else { Quote-BashValue $SourceCommit }
 
 Step "Remote prerequisites, shared environment, and port ownership"
 $preflight = @(
@@ -176,6 +227,7 @@ $preflight = @(
   'command -v nginx >/dev/null || { echo "ERROR: nginx is not installed" >&2; exit 47; }',
   'command -v curl >/dev/null || { echo "ERROR: curl is not installed" >&2; exit 48; }',
   'command -v ss >/dev/null || { echo "ERROR: ss is not installed" >&2; exit 49; }',
+  'command -v flock >/dev/null || { echo "ERROR: flock is not installed" >&2; exit 51; }',
   'if ss -H -ltn "sport = :$APP_PORT" | grep -q .; then',
   '  OWNER_PROJECTS=$(docker ps --filter "publish=$APP_PORT" --format ''{{.Label "com.docker.compose.project"}}'' | sed ''/^$/d'' | sort -u)',
   '  if [ "$OWNER_PROJECTS" != "$PROJECT" ]; then',
@@ -200,6 +252,9 @@ if ($Rollback) {
     "DOMAIN=$quotedDomain",
     "VERIFY_PUBLIC=$quotedVerify",
     "ALLOW_REMOTE_BUILD=$quotedRemoteBuild",
+    'LOCK_FILE="$ROOT/shared/deploy.lock"',
+    'exec 9>"$LOCK_FILE"',
+    'if ! flock -w 900 9; then echo "ERROR: timed out waiting for the production deployment lock" >&2; exit 59; fi',
     'CURRENT=$(readlink -f "$ROOT/current" 2>/dev/null || true)',
     'TARGET=$(readlink -f "$ROOT/previous" 2>/dev/null || true)',
     'if [ -z "$CURRENT" ] || [ -z "$TARGET" ]; then echo "ERROR: both current and previous release links are required for rollback" >&2; exit 60; fi',
@@ -400,9 +455,19 @@ try {
     'install -d -m 755 "$RELEASE"'
   ) -join "`n"
   Invoke-Remote $prepareRelease
-  Invoke-Native "scp" @("-o", "BatchMode=yes", $releaseArchive, "${DeployHost}:$RemoteRelease/release.tgz")
+  Invoke-Native "scp" @(
+    "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=yes",
+    $releaseArchive,
+    "${DeployHost}:$RemoteRelease/release.tgz"
+  )
   if (-not $RemoteBuild) {
-    Invoke-Native "scp" @("-o", "BatchMode=yes", $imageArchive, "${DeployHost}:$RemoteRelease/image.tar")
+    Invoke-Native "scp" @(
+      "-o", "BatchMode=yes",
+      "-o", "StrictHostKeyChecking=yes",
+      $imageArchive,
+      "${DeployHost}:$RemoteRelease/image.tar"
+    )
   }
 
   Step "Install release and start Compose stack"
@@ -421,13 +486,19 @@ try {
     "IMAGE=$quotedImage",
     "IMAGE_TAG=$quotedImageTag",
     "DOMAIN=$quotedDomain",
+    "SOURCE_COMMIT=$quotedSourceCommit",
     "VERIFY_PUBLIC=$quotedVerify",
     "REMOTE_BUILD=$quotedRemoteBuild",
+    'LOCK_FILE="$ROOT/shared/deploy.lock"',
+    'exec 9>"$LOCK_FILE"',
+    'if ! flock -w 900 9; then echo "ERROR: timed out waiting for the production deployment lock" >&2; exit 69; fi',
     'tar -xzf "$RELEASE/release.tgz" -C "$RELEASE"',
     'rm -f "$RELEASE/release.tgz"',
     'test -f "$RELEASE/compose.yaml" && test -f "$RELEASE/Dockerfile" && test -f "$RELEASE/deploy/nginx/essay-manage.location.conf.template"',
     'printf ''%s\n'' "$IMAGE" > "$RELEASE/.deploy-image"',
-    'chmod 644 "$RELEASE/.deploy-image"',
+    'printf ''%s'' "$SOURCE_COMMIT" | grep -Eq ''^[a-f0-9]{40}$'' || { echo "ERROR: source commit metadata is invalid" >&2; exit 70; }',
+    'printf ''%s\n'' "$SOURCE_COMMIT" > "$RELEASE/.source-commit"',
+    'chmod 644 "$RELEASE/.deploy-image" "$RELEASE/.source-commit"',
     'if [ "$REMOTE_BUILD" = "0" ]; then',
     '  cleanup_image_tar() { rm -f "$RELEASE/image.tar"; }',
     '  trap cleanup_image_tar EXIT',
@@ -452,6 +523,45 @@ try {
     '  OLD_PREVIOUS=$(readlink -f "$ROOT/previous")',
     '  case "$OLD_PREVIOUS" in "$ROOT/releases/"*) ;; *) echo "ERROR: previous points outside $ROOT/releases" >&2; exit 69; esac',
     'fi',
+    'CONTENT_LINK="$ROOT/content-current"',
+    'if [ -e "$CONTENT_LINK" ] && [ ! -L "$CONTENT_LINK" ]; then echo "ERROR: content-current exists but is not a symlink" >&2; exit 71; fi',
+    'OLD_CONTENT_LINK=''''',
+    'OLD_CONTENT="$OLD_CURRENT"',
+    'if [ -L "$CONTENT_LINK" ]; then',
+    '  OLD_CONTENT_LINK=$(readlink -f "$CONTENT_LINK")',
+    '  case "$OLD_CONTENT_LINK" in "$ROOT/content-releases/"*|"$ROOT/releases/"*) ;; *) echo "ERROR: content-current points outside managed roots" >&2; exit 72;; esac',
+    '  test -d "$OLD_CONTENT_LINK/essay" && test -f "$OLD_CONTENT_LINK/content/article-manifest.json"',
+    '  OLD_CONTENT="$OLD_CONTENT_LINK"',
+    'fi',
+    'if [ -n "$OLD_CONTENT" ]; then test -d "$OLD_CONTENT/essay" && test -f "$OLD_CONTENT/content/article-manifest.json"; fi',
+    'NETWORK=essay-manage-backend',
+    'run_content_import() {',
+    '  image="$1"',
+    '  snapshot="$2"',
+    '  docker run --rm --network "$NETWORK" --env-file "$ENV_FILE" --volume "$snapshot/essay:/app/essay:ro" --volume "$snapshot/content:/app/content:ro" "$image" node dist/db-deploy.mjs',
+    '}',
+    'snapshot_descriptor() {',
+    '  image="$1"',
+    '  snapshot="$2"',
+    '  docker run --rm --network none --volume "$snapshot/content:/snapshot:ro" "$image" node -e ''const fs=require("node:fs");const crypto=require("node:crypto");const manifest=JSON.parse(fs.readFileSync("/snapshot/article-manifest.json","utf8"));const rows=manifest.articles.filter((article)=>article.status!=="archived").sort((left,right)=>Buffer.compare(Buffer.from(left.sourcePath),Buffer.from(right.sourcePath)));if(rows.length===0)process.exit(2);const body=rows.map((article)=>[article.sourcePath,article.sourceHash,article.status].join("|")).join("\n")+"\n";process.stdout.write([rows.length,rows.filter((article)=>article.status==="published").length,rows.filter((article)=>article.status==="draft").length,crypto.createHash("sha256").update(body).digest("hex")].join("|"));''',
+    '}',
+    'database_descriptor() {',
+    '  db_rows=$(compose exec -T db sh -ec ''PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F "|" -tAc "SELECT source_path, source_hash, status::text FROM articles ORDER BY source_path COLLATE \"C\";"'')',
+    '  active_rows=$(printf ''%s\n'' "$db_rows" | awk -F ''|'' ''NF && $3 != "archived"'')',
+    '  actual_total=$(printf ''%s\n'' "$active_rows" | awk ''NF { count++ } END { print count + 0 }'')',
+    '  actual_published=$(printf ''%s\n'' "$active_rows" | awk -F ''|'' ''$3 == "published" { count++ } END { print count + 0 }'')',
+    '  actual_draft=$(printf ''%s\n'' "$active_rows" | awk -F ''|'' ''$3 == "draft" { count++ } END { print count + 0 }'')',
+    '  actual_digest=$(printf ''%s\n'' "$active_rows" | sha256sum | awk ''{ print $1 }'')',
+    '  printf ''%s|%s|%s|%s\n'' "$actual_total" "$actual_published" "$actual_draft" "$actual_digest"',
+    '}',
+    'verify_database_snapshot() {',
+    '  image="$1"',
+    '  snapshot="$2"',
+    '  expected_descriptor=$(snapshot_descriptor "$image" "$snapshot")',
+    '  actual_descriptor=$(database_descriptor)',
+    '  if [ "$actual_descriptor" != "$expected_descriptor" ]; then echo "ERROR: database content does not match snapshot" >&2; return 1; fi',
+    '}',
+    'CONTENT_IMPORT_STARTED=0',
     'APP_SWITCH_STARTED=0',
     'LINKS_MUTATED=0',
     'restore_release_links() {',
@@ -459,6 +569,8 @@ try {
     '  link_restore_status=0',
     '  if [ -n "$OLD_CURRENT" ]; then ln -sfn "$OLD_CURRENT" "$ROOT/current" || link_restore_status=$?; else rm -f "$ROOT/current" || link_restore_status=$?; fi',
     '  if [ -n "$OLD_PREVIOUS" ]; then ln -sfn "$OLD_PREVIOUS" "$ROOT/previous" || link_restore_status=$?; else rm -f "$ROOT/previous" || link_restore_status=$?; fi',
+    '  rm -f "$CONTENT_LINK.next" || link_restore_status=$?',
+    '  if [ -n "$OLD_CONTENT_LINK" ]; then ln -sfn "$OLD_CONTENT_LINK" "$CONTENT_LINK" || link_restore_status=$?; else rm -f "$CONTENT_LINK" || link_restore_status=$?; fi',
     '  return "$link_restore_status"',
     '}',
     'restore_previous_app() {',
@@ -472,17 +584,31 @@ try {
     '  fi',
     '  return "$result"',
     '}',
+    'restore_previous_content() {',
+    '  if [ "$CONTENT_IMPORT_STARTED" != "1" ] || [ -z "$OLD_CONTENT" ]; then return 0; fi',
+    '  run_content_import "$OLD_IMAGE" "$OLD_CONTENT" && verify_database_snapshot "$OLD_IMAGE" "$OLD_CONTENT"',
+    '}',
     'abort_deploy() {',
     '  status="$1"',
-    '  trap - ERR',
-    '  if ! restore_previous_app; then echo "ERROR: automatic app restore failed" >&2; exit 90; fi',
+    '  trap - ERR HUP INT TERM',
+    '  set +e',
+    '  content_restore_status=0',
+    '  app_restore_status=0',
+    '  restore_previous_content || content_restore_status=$?',
+    '  restore_previous_app || app_restore_status=$?',
+    '  set -e',
+    '  if [ "$content_restore_status" != "0" ] || [ "$app_restore_status" != "0" ]; then echo "ERROR: automatic deployment restore failed (content=$content_restore_status app=$app_restore_status)" >&2; exit 90; fi',
     '  exit "$status"',
     '}',
     'restore_app_on_error() { status=$?; abort_deploy "$status"; }',
     'trap restore_app_on_error ERR',
+    'trap ''abort_deploy 129'' HUP',
+    'trap ''abort_deploy 130'' INT',
+    'trap ''abort_deploy 143'' TERM',
     'compose config --quiet',
     'if [ "$REMOTE_BUILD" = "1" ]; then compose build app; fi',
     'compose rm --stop --force migrator >/dev/null 2>&1 || true',
+    'CONTENT_IMPORT_STARTED=1',
     'APP_SWITCH_STARTED=1',
     'if ! compose up --detach --remove-orphans --wait; then',
     '  echo "ERROR: Compose startup failed; bounded diagnostics follow" >&2',
@@ -493,6 +619,7 @@ try {
     'compose exec -T db sh -ec ''PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1" | grep -qx 1''',
     'MIGRATOR_ID=$(compose ps --all --quiet migrator)',
     'if [ -z "$MIGRATOR_ID" ] || [ "$(docker inspect --format ''{{.State.ExitCode}}'' "$MIGRATOR_ID")" != "0" ]; then echo "ERROR: migrator did not exit successfully" >&2; abort_deploy 72; fi',
+    'verify_database_snapshot "$IMAGE" "$RELEASE"',
     'APP_ID=$(compose ps --quiet app)',
     'test -n "$APP_ID" || { echo "ERROR: app container is not running" >&2; abort_deploy 73; }',
     'ACTUAL_BIND=$(docker port "$APP_ID" 3000/tcp | tr -d ''\r'')',
@@ -526,26 +653,32 @@ try {
     'SITE_MUTATED=0',
     'SNIPPET_MUTATED=0',
     'reload_nginx() { if command -v systemctl >/dev/null 2>&1; then systemctl reload nginx; else nginx -s reload; fi; }',
-    'restore_nginx_on_error() {',
-    '  status=$?',
-    '  trap - ERR',
+    'restore_nginx_transaction() {',
+    '  status="$1"',
+    '  trap - ERR HUP INT TERM',
     '  set +e',
     '  links_restore_status=0',
     '  nginx_restore_status=0',
+    '  content_restore_status=0',
     '  app_restore_status=0',
     '  restore_release_links || links_restore_status=$?',
     '  if [ "$SITE_MUTATED" = "1" ]; then cp -a "$SITE_BACKUP" "$SITE_CONFIG" || nginx_restore_status=$?; fi',
     '  if [ "$SNIPPET_MUTATED" = "1" ]; then if [ "$SNIPPET_EXISTED" = "1" ]; then cp -a "$SNIPPET_BACKUP" "$SNIPPET" || nginx_restore_status=$?; else rm -f "$SNIPPET" || nginx_restore_status=$?; fi; fi',
     '  rm -f "$TMP_SNIPPET" || true',
     '  if ! nginx -t >/dev/null 2>&1; then nginx_restore_status=1; elif ! reload_nginx >/dev/null 2>&1; then nginx_restore_status=1; fi',
+    '  restore_previous_content || content_restore_status=$?',
     '  restore_previous_app || app_restore_status=$?',
-    '  if [ "$links_restore_status" != "0" ] || [ "$nginx_restore_status" != "0" ] || [ "$app_restore_status" != "0" ]; then',
-    '    echo "ERROR: automatic deployment compensation failed (links=$links_restore_status nginx=$nginx_restore_status app=$app_restore_status)" >&2',
+    '  if [ "$links_restore_status" != "0" ] || [ "$nginx_restore_status" != "0" ] || [ "$content_restore_status" != "0" ] || [ "$app_restore_status" != "0" ]; then',
+    '    echo "ERROR: automatic deployment compensation failed (links=$links_restore_status nginx=$nginx_restore_status content=$content_restore_status app=$app_restore_status)" >&2',
     '    exit 90',
     '  fi',
     '  exit "$status"',
     '}',
+    'restore_nginx_on_error() { status=$?; restore_nginx_transaction "$status"; }',
     'trap restore_nginx_on_error ERR',
+    'trap ''restore_nginx_transaction 129'' HUP',
+    'trap ''restore_nginx_transaction 130'' INT',
+    'trap ''restore_nginx_transaction 143'' TERM',
     'install -m 644 "$TMP_SNIPPET" "$SNIPPET"',
     'SNIPPET_MUTATED=1',
     'if ! grep -Fq "$INCLUDE_LINE" "$SITE_CONFIG"; then',
@@ -575,11 +708,14 @@ try {
     '  wait_for_http_status 200 "https://$DOMAIN/essay/" 12',
     'fi',
     'LINKS_MUTATED=1',
+    'ln -sfn "$RELEASE" "$CONTENT_LINK.next"',
     'if [ -n "$OLD_CURRENT" ] && [ "$OLD_CURRENT" != "$RELEASE" ]; then ln -sfn "$OLD_CURRENT" "$ROOT/previous"; fi',
     'ln -sfn "$RELEASE" "$ROOT/current"',
+    'mv -Tf "$CONTENT_LINK.next" "$CONTENT_LINK"',
     'LINKS_MUTATED=0',
+    'CONTENT_IMPORT_STARTED=0',
     'APP_SWITCH_STARTED=0',
-    'trap - ERR',
+    'trap - ERR HUP INT TERM',
     'rm -f "$TMP_SNIPPET"',
     'CURRENT_IMAGE=$(tr -d ''\r\n'' < "$ROOT/current/.deploy-image")',
     'PREVIOUS_IMAGE=''''',
@@ -589,6 +725,7 @@ try {
     'done',
     'echo "RELEASE=$RELEASE"',
     'echo "IMAGE=$IMAGE"',
+    'echo "SOURCE_COMMIT=$SOURCE_COMMIT"',
     'echo "POSTGRES_VOLUME=essay-manage-postgres-data"',
     'echo "DB_HEALTH=healthy"',
     'echo "MIGRATOR_EXIT=0"',

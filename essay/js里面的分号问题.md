@@ -1,80 +1,39 @@
-###  js里面存在的分号问题，会影响程序的执行
+# JavaScript 分号与自动插入：让换行不改变含义
 
-#### 第一点：自动加入分
+适用范围：使用无分号风格的 JavaScript 与代码生成结果；关键原则：自动分号插入只在特定语法位置发生，格式化规则必须阻止下一行意外续接上一行；当前代码示例：下面在以数组开头的语句前主动放置分号；常见误区/边界：return 后换行会返回 undefined，throw 后换行甚至是语法错误；官方参考：[MDN 自动分号插入](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion)。
 
-```
-1.当下一行代码开始会破坏当前一行的代码时( JavaScript 代码可以写在多行中 )。如果一条语句以(、[、/、+或-开始，那么它极有可能和前面一条语句合在一起解析。
-2.当下一行以 } 开头时，或者以 } 结束闭合当前代码块时
-3.当解析到达源代码文件的末尾时
-4.当前行 return 语句后面紧跟着换行时
-5.当前行 break 语句后面紧跟着换行时
-6.当前行 throw 语句后面紧跟着换行时
-7.当前行 continue 语句后面紧跟着换行时
-```
+团队可以选择始终写分号，或由格式化工具统一省略分号。关键不是个人偏好，而是让源代码在插入、合并和压缩后仍有稳定的语法边界。
 
+## 行首可能续接上一行时
 
-**常见的代码错误**
-1. 例子1：
-```
-const hey = 'hey'
-const you = 'you'
-const heyYou = hey + ' ' + you
- 
-['h', 'e', 'y'].forEach((letter) => console.log(letter))
+~~~js
+const ids = [1, 2, 3]
 
-以为的结果是 'hey you' 'h','e','y'
+;[4, 5].forEach((id) => {
+  console.log(id)
+})
+~~~
 
-但是结果是错的
+如果省略第一个分号，方括号可能被解析为对上一行数组结果的访问。以圆括号、方括号、正则字面量、加号或减号开头的语句，都应检查是否会与前一行连接；在无分号代码库中，防御性行首分号是常见做法。
 
-现在的错误就是出现undefined
+## return 必须携带返回值
 
-因为在js解析的时间，const heyYou = hey + ' ' + you['h', 'e', 'y'].forEach((letter) => console.log(letter))
-
-出现在一排，一起执行
-```
-
-**类似于下面的代码**
-
-```
-const a = 1
-const b = 2
-const c = a + b
-(a + b).toString()
-
-js编译的时间还是const c = a + b(a + b).toString()
-```
-
-2.例子2:
-```
-var         // 这一行不会插入分号 ，因为 下一行的代码不会破坏当前行的代码  
-    a = 1   // 这一行会插入分号   
-let b = 2 
-```
-
-3.例子3:
-```
-(() => {
+~~~js
+function brokenResult() {
   return
   {
-    color: 'white'
+    ok: true,
   }
-})()
+}
 
-出现打印的是undefined
-
-
-(() => {
+function validResult() {
   return {
-    color: 'white'
+    ok: true,
   }
-})()
+}
 
-出现的是 {color: 'white'}
-```
+console.log(brokenResult()); // undefined
+console.log(validResult()); // { ok: true }
+~~~
 
-
-#####注意事项
-
-> 请注意 return 语句。 如果你想返回一些东西，把它添加到与 return 同一行上（同样用于 break ，throw ，continue）。
-> 永远不要用 (、[、/、+或- 开始一行，这些可能与前一行连接以形成函数调用或数组元素引用。
-
+换行后的对象不会成为 return 的值。break 与 continue 的标签、以及 throw 的表达式也不应拆到下一行。最可靠的防线是启用项目已有的格式化器和 lint 规则，并在提交前自动执行；不要靠人工背诵所有自动插入规则。

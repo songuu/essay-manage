@@ -17,7 +17,7 @@ Nginx /essay/* → Next.js standalone → 列表、全文检索、文章详情�
 - `scripts`：内容清单、迁移、导入、生产发布。
 - `compose.yaml`：PostgreSQL、一次性 migrator、Next.js app 三服务拓扑。
 
-现有 43 篇 Markdown 会全部进入数据库：42 篇非空文章为 `published`，1 个空文件保留为 `draft`，不会出现在公开页面。原文不被改写或搬迁。
+所有 `essay/**/*.md` 都会进入数据库：非空文章为 `published`，空文件保留为 `draft`，不会出现在公开页面。原文不被改写或搬迁，测试会按磁盘上的实际文章数验证完整性。
 
 ## 本地开发
 
@@ -35,15 +35,21 @@ pnpm dev
 
 ## 内容工作流
 
-新增或修改 Markdown 后执行：
+新增或修改 Markdown 后先提交并 push 到 `master`：
 
 ```powershell
-pnpm content:manifest
-pnpm content:verify
-pnpm db:deploy
+git add essay
+git commit -m "content: add article"
+git push origin master
 ```
 
-清单只保存元数据和内容哈希，不复制正文。导入器会校验哈希、幂等 upsert，并把已从清单删除的旧记录标记为 `archived`；空清单会被拒绝，防止误归档全部文章。
+GitHub Actions 会生成并验证 manifest。若本次提交只修改 `essay/**/*.md` 或 manifest，则复用当前生产镜像进行轻量数据库同步；代码、配置或混合变更会执行完整容器部署。发布时间与更新时间来自 Git 历史，因此未提交的新文件会被明确拒绝，不会以伪造时间发布。
+
+清单只保存元数据和内容哈希，不复制正文。历史文件字节和混合行尾保持不变，读取、校验和入库时才把 CRLF/CR 规范化为 LF，因此 Windows 手工入口与 Linux Actions 会得到同一 hash。导入器会校验 hash、幂等 upsert，并把已从清单删除的旧记录标记为 `archived`；空清单会被拒绝，防止误归档全部文章。需要手工重跑内容同步时使用：
+
+```powershell
+pnpm content:sync:production
+```
 
 ## 质量门禁
 
@@ -63,5 +69,7 @@ pnpm build
 pwsh scripts/deploy-production.ps1 -DryRun
 pwsh scripts/deploy-production.ps1
 ```
+
+`master` push 的自动部署入口是 `.github/workflows/essay-manage-deploy.yml`，实现方式与 `agent-build` 一致：完整并发队列、质量门、SSH 上传、受控切换和公网验证。仓库必须配置 `ESSAY_DEPLOY_SSH_PRIVATE_KEY` 与预先核验的 `ESSAY_DEPLOY_KNOWN_HOSTS`；主机、用户和域名可分别通过 `ESSAY_DEPLOY_HOST`、`ESSAY_DEPLOY_USER`、`ESSAY_DEPLOY_DOMAIN` 覆盖默认值。
 
 首次初始化、健康证据、回滚边界与故障处理见 [docs/deployment.md](docs/deployment.md)。

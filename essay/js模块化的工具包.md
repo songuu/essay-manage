@@ -1,45 +1,38 @@
-### AMD CMD require.js common.js sea.js es6中间存在的模块化
+# JavaScript 模块化：以 ESM 为默认边界
 
+适用范围：浏览器应用、Node.js 服务和可发布的 JavaScript 包；关键原则：一个模块公开明确的 export，消费者用静态 import 建立依赖图，动态 import 只用于真正按需加载的边界；当前代码示例：下面展示具名导出、相对导入和异步加载；常见误区/边界：不同运行时对旧包的默认导入形状可能不同，迁移时必须集中适配并测试实际出口；官方参考：[MDN JavaScript 模块](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Guide/Modules)。
 
-**AMD.js、require.js、CMD**
-```
-AMD是requireJS在推广过程中对模块定义的规范化产出。
-AMD是一个规范，只定义语法API，
-而requireJS是具体的实现。
-类似于ECMAScript和javascript的关系
+ESM 是现代 JavaScript 的标准模块格式。静态 import 能让运行时和打包器分析依赖、检查未使用导出，并更可靠地拆分代码。
 
+## 从明确的导出开始
 
-1.AMD的特点是依赖前置，对于依赖的模块提前执行
-2.CMD 是 SeaJS 在推广过程中对模块定义的规范化产出，它的特点是依赖就近，对于依赖的模块延迟执行
+~~~js
+// formatters.js
+export function formatTitle(value) {
+  return value.trim().replaceAll(/\s+/g, " ");
+}
 
+export const defaultLocale = "zh-CN";
 
-a.js和b.js
-// AMD
-define(['./a', './b'], function(a, b) {  // 依赖必须一开始就写好
-    a.doSomething()    
-    // 此处略去 n 行    
-    b.doSomething()    
-    ...
-})
+// main.js
+import { defaultLocale, formatTitle } from "./formatters.js";
 
-// CMD
-define(function(require, exports, module) { 
-    var a = require('./a')
-     a.doSomething()  
-    // 此处略去 n 行   
-    var b = require('./b') // 依赖可以就近书写  
-    b.doSomething()   
-    // ... 
-})
-```
+console.log(defaultLocale, formatTitle("  模块   边界  "));
+~~~
 
-**common.js和sea.js**
-```
-CommonJS规范主要在NodeJS后端使用，前端浏览器不支持该规范
-sea.js来源于阿里
-```
+浏览器和 Node.js 的 ESM 相对导入通常要求写出文件扩展名。将导出保持小而稳定，比暴露一个不断增长的全局工具对象更容易维护。
 
-**ES6**
-```
-ES6的Module模块主要通过export和import来进行模块的导入和导出
-```
+## 只在需要时动态加载
+
+~~~js
+export async function loadChartRenderer() {
+  const module = await import("./chart-renderer.js");
+  return module.renderChart;
+}
+~~~
+
+动态 import 返回 Promise，适合路由、编辑器或体积较大的可选功能。它不应被用来掩盖循环依赖或延迟处理本应启动时失败的基础模块。
+
+## 迁移旧包时建立适配层
+
+若某个依赖仍以旧式导出方式发布，其命名空间和默认导出的形状取决于包的 exports 字段、运行时和打包器。把互操作逻辑集中在一个适配模块中，只向应用其余部分导出稳定的 ESM API；逐个迁移入口并在目标环境执行导入测试。不要把两套加载语义散落在业务代码里。

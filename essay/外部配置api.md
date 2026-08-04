@@ -1,112 +1,67 @@
-### 在使用vue打包文件以后会出现api写死在dist文件的情况，
-### 每次要修改的时间就要去修改config文件，然后还要重新打包，这样就会增加项目的困难
+# 前端 API 配置：区分构建时与运行时
 
-#### 所以现在就直接在外部将文件写好，使用axios去异步请求这个api接口
+适用范围：同一份前端产物需要部署到多个环境；关键原则：构建时变量决定编译结果，运行时配置以受校验的数据文件注入；当前代码示例：启动前读取 runtime-config.json 并验证 apiBaseUrl；常见误区/边界：运行时配置对所有访问者可见，不能存放密钥，也不能把下载内容当作代码执行；官方参考：[MDN Fetch API](https://developer.mozilla.org/zh-CN/docs/Web/API/Fetch_API)。
 
-> 首先声明现在存在的环境是cli3
+构建时配置适合不会在发布后改变的标识、特性开关默认值和优化选项。它会被打包器替换进产物，修改后必须重新构建。服务地址、发布渠道等可公开且可能随部署变化的值，才适合放到运行时配置。
 
-1. 由于出现在cli3中，其实就是以前版本的简化，没有了以前的build文件夹，所以配置难度其实是比以前的大
-2. 可以直接在public文件夹下面建立config.js  配置api接口
+## 用 JSON 提供运行时配置
 
+部署产物旁放置一个普通数据文件：
 
-**直接上手**
-```
-(function(env) {
-	const dev  =   {
-		host: "http://192.168.1.90:8080/weakscanf",
-		base: '/'   
-	}; 
+~~~json
+{
+  "apiBaseUrl": "https://api.example.com/v1",
+  "releaseChannel": "stable"
+}
+~~~
 
-	const pro  =   {
-		host: "http://192.168.1.90:8080/weakscanf",
-		base: 'html5'  
-	}; 
-	if(env  === 'dev')  {
-		return dev;
-	}
-	else if(env  === 'test')  {
-		return pro;		    
-	} 
-}('test'))
+应用启动时读取并验证它，而不是使用字符串拼接或动态执行：
 
-建立自执行函数
-```
+~~~js
+function validateRuntimeConfig(value) {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("运行时配置必须是对象");
+  }
 
-#### 在main.js中间直接调用axios请求
+  const { apiBaseUrl, releaseChannel } = value;
+  if (typeof apiBaseUrl !== "string") {
+    throw new Error("apiBaseUrl 必须是字符串");
+  }
 
-**直接上代码**
+  let url;
+  try {
+    url = new URL(apiBaseUrl);
+  } catch {
+    throw new Error("apiBaseUrl 必须是可解析的绝对 URL");
+  }
 
-##### 第一种方法 (使用全局变量)
-```
-import axios from 'axios'
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new Error("apiBaseUrl 必须是不含凭据的 HTTPS 地址");
+  }
 
-let configPath = './config.js';
-if(process.env.NODE_ENV === 'development') {
-	configPath = '../config.js';
-}//判断环境
+  return Object.freeze({
+    apiBaseUrl: url.href,
+    releaseChannel: typeof releaseChannel === "string" ? releaseChannel : "unknown",
+  });
+}
 
-window.aaa = ''
-window.bbb = ''
+export async function loadRuntimeConfig() {
+  const response = await fetch("/runtime-config.json", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("读取运行时配置失败: " + response.status);
+  }
 
-axios.get(configPath).then(res  =>  { 
-	bbb = eval(res.data).host
-	aaa = eval(res.data).base
+  return validateRuntimeConfig(await response.json());
+}
 
-	new Vue({
-		el: '#app',
-		router,
-		store,
-		render: h => h(App)
-	})
-});
-```
+async function bootstrap() {
+  const config = await loadRuntimeConfig();
+  await startApplication(config);
+}
+~~~
 
-##### 第二种方法(使用webpack的全局变量)
+`new URL()` 会先验证地址是否真能解析成绝对 URL，再由协议与凭据检查约束部署策略；只用 `startsWith("https://")` 会漏掉格式非法或包含嵌入式凭据的字符串。这里的 startApplication 由应用自身实现，并通过参数接收配置。这样 API 客户端不依赖全局可变变量，也便于单元测试传入不同配置。
 
-```
-import axios from 'axios'
+## 发布边界
 
-let configPath = './config.js';
-if(process.env.NODE_ENV === 'development') {
-	configPath = '../config.js';
-}//判断环境
-
-axios.get(configPath).then(res  =>  { 
-	Vue.prototype.host = eval(res.data).host
-	Vue.prototype.base = eval(res.data).base
-
-	new Vue({
-		el: '#app',
-		router,
-		store,
-		render: h => h(App)
-	})
-});
-```
-
-##### 第三种方法(使用cookie进行保存)
-
-```
-import Cookies from 'js-cookies'
-import axios from 'axios'
-
-let configPath = './config.js';
-if(process.env.NODE_ENV === 'development') {
-	configPath = '../config.js';
-}//判断环境
-
-axios.get(configPath).then(res  =>  { 
-	Cookies.set('host',eval(res.data).host)
-	Cookies.set('base',eval(res.data).base)
-
-	new Vue({
-		el: '#app',
-		router,
-		store,
-		render: h => h(App)
-	})
-});
-
-```
-
-其实保存的方法有很多种 ，其实读者都可以试一下
+运行时文件应受 HTTPS、内容安全策略和缓存策略保护；若需要变更后立即生效，可为该文件设置短缓存或使用带版本的文件名。认证令牌、数据库口令和第三方私钥必须保留在服务端。配置读取失败时应显示可恢复的启动错误，而不是悄悄退回到未知地址。

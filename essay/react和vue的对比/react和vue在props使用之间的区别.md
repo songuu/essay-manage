@@ -1,128 +1,118 @@
-# 首先在props使用的作用上面差不多，但是react的功能上面要多点
+# React 与 Vue 的 props：单向数据流下的输入、事件与双向绑定约定
 
-**在react中间的功能更加的复杂**
-**数据的定义和数据的更改最好在同一个组件中间**
-**三层传递时，直接使用props就行**
+适用范围：需要设计可复用 React 函数组件或 Vue 3 组件 API 的场景；关键原则：props 是调用方拥有的只读输入，子组件通过回调或 emits 表达意图，而不是直接改写输入。本文以受控搜索框展示两种现代写法，说明 v-model 的契约、对象引用和属性透传的边界。
 
-> react中props分为类中间和函数之间
+## 共同点：数据向下，意图向上
 
-1. 完全受控组件 （数据来源于props）
-2. 半完全受控组件 （数据来源于props和state）
-3. 非受控组件 （数据来源于state）
+React 与 Vue 都把 props 作为父级传给子级的输入。子组件应当根据 props 渲染，并通过一个明确的出口通知调用方：React 通常传入回调函数，Vue 通常声明 emit。这样状态归属始终可追踪，组件也能独立测试。
 
-> 更新组件
+“只读”不只意味着不能重新赋值。若 props 是对象或数组，直接修改其中的字段仍会越过调用方的更新路径。应由拥有状态的一方创建下一份值，或由子组件发出描述操作的事件。
 
-1. props改变
-2. state改变
-3. 强制刷新
+## React 示例：受控组件用回调表达变更
 
-> 函数式组件和类组件中间使用props的方式不同 体现在props的调用上面
-> 在使用props属性调用时，props.property和props.children  体现在property所调用为组件申明时，children为组件内部调用
-`
-export default function TodoHeader(props) {
+~~~tsx
+import { useState } from 'react'
+
+type SearchInputProps = {
+  value: string
+  onValueChange: (nextValue: string) => void
+  disabled?: boolean
+}
+
+export function SearchInput({
+  value,
+  onValueChange,
+  disabled = false,
+}: SearchInputProps) {
   return (
-    <>
-      <h1>
-        {props.children}
-      </h1>
-      <h3>{props.desc}</h3>
-    </>
+    <label>
+      搜索文章
+      <input
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onValueChange(event.target.value)}
+      />
+    </label>
   )
 }
 
-export default class TodoInput extend Component {
-  constructor () {
-    super()
-    this.state = {
-      inputValue: ''
-    }
-    // 在constructor里来创建ref
-    this.inputDom = createRef()
-  }
-  handleInputChange = (e) => {
-    this.setState({
-      inputValue: e.currentTarget.value
-    })
-  }
-  handleKeyUp = (e) => {
-    if (e.keyCode === 13) {
-      this.handleAddClick()
-    }
-  }
-  handleAddClick = () => {
-    // 实际的项目中，这里还需要去对this.state.inputValue做验证，如果验证通过，再执行下面的方法
-    if (this.state.inputValue === '') {
-      return
-    }
-    this.props.addTodo(this.state.inputValue)
-    this.setState({
-      inputValue: ''
-    }, () => {
-      this.inputDom.current.focus()
-    })
-  }
-  render() {
-    return (
-      <div>
-        <input
-          type="text"
-          value={this.state.inputValue}
-          onChange={this.handleInputChange}
-          onKeyUp={this.handleKeyUp}
-          ref={this.inputDom}
-        />
-        <button onClick={this.handleAddClick}>{this.props.btnText}</button>
-      </div>
-    )
-  }
+export function ArticleSearchPage() {
+  const [query, setQuery] = useState('')
+
+  return <SearchInput value={query} onValueChange={setQuery} />
 }
-`
+~~~
 
-**在vue中间的props比较简单**
-**相比较在react中间定义类型需要引入propsType,但是在vue中间可以直接使用类型定义**
-**vue区分组件调用传递和组件内部传递，props和slot**
+回调名应描述领域动作而非技术细节，例如 onPublish、onRemove 或 onValueChange。不要假设 key 会作为普通 props 传入；列表 key 仅供 React 协调同级元素身份使用。
 
-> 通过父组件传递给子组件
+## Vue 3 示例：显式实现 v-model 契约
 
-`
-parent.vue
+Vue 的默认 v-model 是 modelValue prop 与 update:modelValue 事件的语法糖。组件内部仍然保持单向流：输入变动时 emit，父组件更新自己的 ref 后再把新值传回。
 
-<template>
-    <div>
-        <child id="id"></child>
-    </div>
-</template>
-<script>
-    import child from 'child.vue'
-    export dealut {
-        data() {
-            return {
-                id: 1
-            }
-        },
-        component: {
-            child
-        }
-    }
+~~~vue
+<!-- SearchInput.vue -->
+<script setup lang="ts">
+const props = defineProps<{
+  modelValue: string
+  disabled?: boolean
+}>()
+
+const emit = defineEmits<{
+  'update:modelValue': [value: string]
+}>()
+
+function onInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  emit('update:modelValue', input.value)
+}
 </script>
 
+<template>
+  <label>
+    搜索文章
+    <input
+      :value="props.modelValue"
+      :disabled="props.disabled"
+      @input="onInput"
+    >
+  </label>
+</template>
+~~~
 
-child.vue
+~~~vue
+<!-- 父组件 -->
+<script setup lang="ts">
+import { ref } from 'vue'
+import SearchInput from './SearchInput.vue'
+
+const query = ref('')
+</script>
 
 <template>
-    <div>
-        {{id}}
-    </div>
+  <SearchInput v-model="query" />
 </template>
-<script>
-    export dealut {
-        props: {
-            id: {
-                default: 1,
-                type: Number
-            }
-        }
-        data() {},
-    }
-</script>
-`
+~~~
+
+一个组件需要多个可双向绑定的字段时，应让每个字段名和更新事件都表达业务含义，并在文档中说明默认值、空值和异步失败行为。
+
+## 属性设计的边界
+
+React 的 children 是普通 props，适合让调用方提供嵌入内容；Vue 的 slot 是与之相近但模板化的组合入口。两者都不等于共享状态：跨层共享应使用 Context、provide/inject 或明确的状态容器。
+
+Vue 中未被声明的属性可能落到根元素，组件有多个根节点或需要精确控制透传时应明确设计属性归属。React 中 rest props 也不应不加筛选地转发给 DOM，尤其是内部业务字段、无效属性和事件处理函数。
+
+## 常见误区与检查点
+
+- 不要为了“方便”直接修改对象型 props；改用回调或 emit，让上层拥有写入权。
+- 不要为每个输入都建立本地副本。只有编辑草稿、延迟提交或可撤销交互确实需要时，才维护本地状态并说明与外部值同步的规则。
+- 避免把函数 props 或 emits 设计成含糊的 change；优先传递具体领域动作和必要数据。
+- 将 props 解构为普通变量时，要确认响应性语义与项目编译配置一致；跨配置复用的组件可保留 props 访问或使用 toRefs。
+- 无障碍标签、禁用状态、错误提示和输入法组合输入也是组件 API 的一部分，应在交互测试中覆盖。
+
+## 官方参考
+
+- [React：通过 props 向组件传递数据](https://react.dev/learn/passing-props-to-a-component)
+- [React：在组件之间共享状态](https://react.dev/learn/sharing-state-between-components)
+- [Vue：组件 Props](https://vuejs.org/guide/components/props.html)
+- [Vue：组件事件](https://vuejs.org/guide/components/events.html)
+- [Vue：组件 v-model](https://vuejs.org/guide/components/v-model.html)

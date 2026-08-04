@@ -1,56 +1,107 @@
-# 同时都是作用域的插槽，但是在使用上面出现了很大的变化
+# Vue 3 插槽：用具名插槽与作用域插槽设计可扩展组件
 
-> 在 2.5 的版本中，由于生成 slot 的作用域是在父组件中，所以明明是子组件的插槽 slot 的更新是会带着父组件一起更新的
-> 同时都可以用this.$slotScoped来进行直接访问
-```
+适用范围：为 Vue 3 组件库、业务卡片、表格或布局容器设计可定制展示区域的场景；关键原则：子组件拥有结构与数据，父组件拥有插入的 UI；插槽用于组合展示，props 与 emits 用于数据和动作。本文以具名插槽、默认内容和作用域数据给出 script setup 时代的写法，并说明插槽不应成为隐式状态通道。
 
-在 3.0 中我们希望实现的另一个关于 slot 的改进就是统一 slot 和 scoped slot 的内部实现，从而获得更好的性能优化。普通的 slot 是在父组件的渲染函数中被生成的，因此当一个普通的 slot 所依赖的数据发生变化时，首先触发的是父组件的更新，然后新的 slot 内容被传到子组件，触发子组件更新。相比之下，scoped slot 在编译时生成的是一个函数，这个函数被传入子组件之后会在子组件的渲染函数中被调用。这意味着 scoped slot 的依赖会被子组件收集，那么当依赖变动时就只会直接触发子组件更新了。2.6 中我们又引入了另一个优化：如果子组件只使用了 scoped slot，那么父组件自身依赖变动时，不会再强制子组件更新。这个优化使得父子组件之间的依赖即使在存在 slot 的情况下依然完全解耦，从而保证最优的整体更新效率。
+## 插槽解决的是“由谁渲染这块 UI”
 
-```
-**注意 v-slot 只能添加在template**
-### 出现具名插槽时，只能使用一个具名的slot 且以后面的那个生效 直接覆盖
+组件 API 有两类常见扩展点：
 
-```
-// template
-<div>
-  <foo :data="data">
-    <template v-slot:aa="props">
-      555{{props.item}}
+- 固定输入与业务动作：用 props 和 emits，便于类型、测试和行为追踪。
+- 调用方决定的局部展示：用 slot，让父组件在子组件结构中插入内容。
+
+具名插槽适合 header、actions、empty 等稳定位置；默认插槽适合主要内容；作用域插槽让子组件把每行、每项的上下文交给父组件决定如何显示。插槽内容在父组件的作用域中执行，不能把它当作直接修改子组件内部状态的入口。
+
+## 现代代码示例：一个可定制的数据面板
+
+~~~vue
+<!-- DataPanel.vue -->
+<script setup lang="ts">
+type Row = {
+  id: string
+  title: string
+  status: 'draft' | 'published'
+}
+
+defineProps<{ rows: Row[] }>()
+</script>
+
+<template>
+  <section class="data-panel">
+    <header>
+      <slot name="header">
+        <h2>文章列表</h2>
+      </slot>
+    </header>
+
+    <ul v-if="rows.length">
+      <li v-for="(row, index) in rows" :key="row.id">
+        <slot :row="row" :index="index">
+          {{ row.title }}（{{ row.status }}）
+        </slot>
+      </li>
+    </ul>
+
+    <slot v-else name="empty">
+      <p>暂无数据</p>
+    </slot>
+
+    <footer>
+      <slot name="actions" />
+    </footer>
+  </section>
+</template>
+~~~
+
+调用方用 #名称 声明具名插槽，用解构参数接收作用域数据：
+
+~~~vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import DataPanel from './DataPanel.vue'
+
+const rows = ref([
+  { id: '1', title: '组合式 API', status: 'published' as const },
+  { id: '2', title: '状态建模', status: 'draft' as const },
+])
+</script>
+
+<template>
+  <DataPanel :rows="rows">
+    <template #header>
+      <h2>我的文章</h2>
     </template>
-    <template v-slot:bb="props">
-      555{{props.item}}
+
+    <template #default="{ row, index }">
+      <strong>{{ index + 1 }}. {{ row.title }}</strong>
+      <span>{{ row.status }}</span>
     </template>
-    <template v-slot:bb="bbb">
-      {{bbb}}
+
+    <template #actions>
+      <button type="button">新建文章</button>
     </template>
-    <template v-slot="props">
-      {{props.item + 1}}
-    </template>
-  </foo>
-</div>
-// js
-var vm = new Vue({  
-   el: '#app',
-  data() {
-    return {
-      data: [1,2,3]
-    }
-  },
-   methods: {  
-   },  
-   components: {  
-     foo: {
-       template: `<ul>
-        <li v-for='item in data'>
-          <slot :item='item' name='aa'></slot>
-          <slot :item='item' name='bb'></slot>
-          <slot :item='item'></slot>
-        </li>
-       </ul>`,
-       props: {
-         data: Array
-       }
-     }
-        }  
-    });  
-```
+  </DataPanel>
+</template>
+~~~
+
+默认内容是组件 API 的一部分：它保证调用方不传 slot 时仍有合理的可访问、可理解的界面。
+
+## 设计插槽 API 的边界
+
+插槽名称应稳定且有业务语义，例如 actions、summary、empty；不要为每个细碎 DOM 元素开一个插槽，否则组件结构难以演进。作用域数据也应最小化，只暴露调用方渲染所需的 row、index 或格式化结果，不泄露内部可变实现。
+
+需要让父组件控制子组件行为时，优先 emit 明确事件。需要跨层复用业务逻辑时，抽取 composable。需要全局协调数据时，再考虑 Pinia 或其他状态方案。插槽是 UI 组合工具，不是状态管理机制。
+
+## 常见误区与检查点
+
+- 不要用 slot 替代 props：固定文本、禁用状态、尺寸等简单输入应使用明确的 props。
+- 不要让 slot 内容修改共享对象来驱动子组件；这样很难判断写入者与更新顺序。
+- 列表中的 slot 仍需稳定 key，key 应来自领域标识而不是数组下标。
+- 没有内容时应提供默认 empty UI 或明确要求调用方提供，避免白屏与无障碍信息缺失。
+- 复杂 slot API 要补渲染测试：默认内容、具名内容、作用域数据、空列表和异常数据都应覆盖。
+
+## 官方参考
+
+- [Vue：插槽](https://vuejs.org/guide/components/slots.html)
+- [Vue：组件 Props](https://vuejs.org/guide/components/props.html)
+- [Vue：组件事件](https://vuejs.org/guide/components/events.html)
+- [Vue：Composition API FAQ](https://vuejs.org/guide/extras/composition-api-faq.html)

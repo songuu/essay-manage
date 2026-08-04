@@ -1,154 +1,44 @@
-### 新旧布局的逻辑属性
-```
-旧的逻辑属性
-新的逻辑属性
+# 现代 CSS 布局：Grid、Flex 与逻辑属性
 
-margin-top
-margin-block-start
+适用范围：响应式卡片、双向文字界面和固定操作按钮；关键原则：先用正常文档流安排结构，再按职责选择 Grid 或 Flex，并用逻辑属性适配书写方向；当前代码示例：下面的卡片网格使用 grid、gap 和 padding-inline；常见误区/边界：视觉重排不应破坏 DOM 阅读顺序，逻辑尺寸会随 writing-mode 改变含义；官方参考：[MDN CSS 布局](https://developer.mozilla.org/zh-CN/docs/Learn_web_development/Core/CSS_layout)。
 
+Grid 适合二维轨道布局，Flex 适合一维对齐与分配空间。两者都应建立在正常流之上；绝对定位更适合与内容流无关的装饰或悬浮控件。
 
-margin-right
-margin-inline-end
+## 从物理方向改为逻辑方向
 
+~~~css
+.page {
+  max-inline-size: 72rem;
+  margin-inline: auto;
+  padding-inline: clamp(1rem, 4vw, 3rem);
+}
 
-margin-bottom
-margin-block-end
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: clamp(0.75rem, 2vw, 1.5rem);
+}
 
+.card {
+  display: grid;
+  gap: 0.75rem;
+  min-block-size: 12rem;
+  padding: 1rem;
+  border: 1px solid CanvasText;
+  border-radius: 0.75rem;
+}
 
-margin-left
-margin-inline-start
+.floating-action {
+  position: fixed;
+  inset-block-end: 1rem;
+  inset-inline-end: 1rem;
+}
+~~~
 
+inline 表示文本行方向，block 表示文本块方向。padding-inline、margin-block 和 inset-inline-end 在从右到左或纵向书写模式下仍表达布局意图；width 和 height 则是固定的物理方向。
 
-border-top
-border-block-start
+## 选择布局工具
 
+一行工具栏通常使用 Flex，并通过 gap 处理间距；需要同时控制行与列的内容区域使用 Grid。不要为了清除浮动或模拟列布局制造额外包装元素。旧的浮动仍适合让文字环绕图片，但不是页面主布局的首选。
 
-border-right
-border-inline-end
-
-
-border-bottom
-border-block-end
-
-
-border-left
-border-inline-start
-
-
-padding-top
-padding-block-start
-
-
-padding-right
-padding-inline-end
-
-
-padding-bottom
-padding-block-end
-
-
-padding-left
-padding-inline-start
-
-
-width
-inline-size
-
-
-height
-block-size
-```
-
-### css定位属性
-```
-旧的属性  新的属性
-top	inset-block-start
-bottom	inset-block-end
-left	inset-inline-start
-right	inset-inline-end
-```
-
-### css浮动属性
-```
-旧的属性  新的属性
-float: left	float: inline-start
-float: right	float: inline-end
-```
-
-
-### 视觉格式化模型
-```
-每个盒子的布局由以下因素决定：
-
-盒子的尺寸
-盒子的类型：行内盒子 (inline)、行内级盒子 (inline-level)、原子行内级盒子 (atomic inline-level)、块盒子 (block)
-定位：普通流、浮动、绝对定位
-文档树中当前盒子的子元素 或 兄弟元素
-视口(viewport) 的尺寸 和位置
-盒子内部图片的尺寸
-其他某些外部因素
-```
-> 在使用的中间在定义盒子的尺寸、类型、定位的时最为重要
-
-**盒子的尺寸**
-```
-width，height
-```
-
-**盒子的类型**
-> 取决于display属性
-
-##### 块级元素
-
-当元素的display  为 block、list-item 或 table 时，它就是块级元素。
-(自动换行，可以设置宽和高)
-
-##### 块级盒子
-
-块级盒子用于描述它与父、兄弟元素之间的关系。
-每个块级盒子都会参与 块格式化上下文(block formatting context) 的创建。
-每个块级元素都会至少生成一个块级盒子，即 主块级盒子 (principal block-level box)
-主块级盒子包含由后代元素生成的盒子以及内容，同时它也会参与定位方案。
-一个同时是块容器盒子的块级盒子称为块盒子 (block box)。
-
-##### 匿名盒子
-
-某些情况下需要进行视觉格式化时，需要添加一些增补性的盒子，这些盒子不能被CSS 选择器选中，也就是所有可继承的 CSS 属性值都为 inherit ，而所有不可继承的 CSS 属性值都为 initial。因此称为**匿名盒子(anonymous boxes) **。
-
-##### 行内元素
-
-当元素的display  为 inline、inline-block 或 inline-table 时，它就是行内级元素。
-显示时可以与其他行内级内容一起显示为多行。
-(一行显示，不能设置宽和高)
-
-##### 行内盒子
-
-行内级元素会生成行内级盒子，该盒子同时会参与行内格式化上下文（inline formatting context）的创建。
-
-##### 匿名行内盒子
-
-类似于块盒子，CSS引擎有时候也会自动创建一些行内盒子。这些行内盒子无法被选择符选中，因此是匿名的，它们从父元素那里继承那些可继承的属性，其他属性保持默认值 initial。
-
-##### 行盒子
-
-行盒子由行内格式化上下文创建，用来显示一行文本。在块盒子内部，行盒子总是从块盒子的一边延伸到另一边（译注：即占据整个块盒子的宽度）。当有浮动元素时，行盒子会从向左浮动的元素的右边缘延伸到向右浮动的元素的左边缘。
-
-**定位**
-确定了盒子之后就要来确定定位
-##### 普通流
-
-在普通流中，盒子会依次放置。
-在块格式化上下文(block formatting context) 中，盒子在垂直方向依次排列。
-在行内格式化上下文(inline formatting context) 中，盒子则水平摆列。
-
-
-##### 浮动：当一个盒子的float不为none，并且position为static或relative时，该盒子为浮动定位。
-
-float: left：盒子会定位到当前行盒子的开始位置（左侧）。
-float: right：盒子会定位到当前行盒子的尾部位置（右侧）。
-
-
-##### 绝对定位：如果元素的position 为 absolute 或 fixed，该元素为绝对定位。
-
-在绝对定位中，盒子会完全从当前流中移除，并且不会再与其有任何联系。
-
+在窄视口、放大文字、长单词和从右到左语言下检查布局。order、grid-area 等视觉重排会影响键盘阅读与屏幕阅读器的理解时，应调整 HTML 结构而不是只改显示位置。更多逻辑属性见 [MDN CSS 逻辑属性](https://developer.mozilla.org/zh-CN/docs/Web/CSS/Guides/Logical_properties_and_values)。

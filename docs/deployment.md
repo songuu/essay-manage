@@ -8,6 +8,7 @@
 - `migrator`：与 `app` 复用同一镜像，执行 `node dist/db-deploy.mjs`；数据库健康后运行，退出码为 `0` 后才启动应用。
 - `db`：固定为生产机已缓存的 PostgreSQL 17.10 digest，数据保存在独立命名卷 `essay-manage-postgres-data`。
 - 发布代码：`/opt/essay-manage/releases/<timestamp>`。
+- 内容快照：`/opt/essay-manage/content-releases/<run-id>-<attempt>`，`content-current` 只在数据库与公网验证成功后原子切换。
 - 生产环境变量：`/opt/essay-manage/shared/.env.production`，不进入 release、镜像或 Git。
 - 发布指针：`/opt/essay-manage/current` 和 `/opt/essay-manage/previous`。
 
@@ -32,6 +33,26 @@ vi /opt/essay-manage/shared/.env.production
 
 ## 部署
 
+### Push 自动发布
+
+与 `agent-build` 相同，`.github/workflows/essay-manage-deploy.yml` 监听 `master` push，并使用 `essay-manage-production` 并发组串行发布：
+
+- 只修改 `essay/**/*.md` 或 `content/article-manifest.json`：生成 manifest，运行质量门，然后调用 `scripts/sync-content-production.ps1`；它把内容快照挂载到当前生产镜像，执行幂等 migrator/import，并回读文章数量及 `source_path/source_hash/status` 摘要。
+- 修改任何代码、配置或同时修改文章与代码：调用现有 `scripts/deploy-production.ps1` 执行完整镜像发布。
+- `workflow_dispatch` 可选择 `auto`、`content` 或 `full`；`auto` 是默认且最安全的路径。
+
+分类基线来自生产 `current/.source-commit`，而不是单次 push 的 `before`。因此前一次完整部署失败或生产回滚后，后续文章提交会看到累计代码差异并自动升级为完整部署，不会在旧镜像上误报成功。并发组使用 `queue: max`，不会让新的 pending run 替换待执行的完整发布。
+
+必需的仓库 secrets 是 `ESSAY_DEPLOY_SSH_PRIVATE_KEY` 和预先核验的 `ESSAY_DEPLOY_KNOWN_HOSTS`。工作流强制 `StrictHostKeyChecking=yes`，不会在发布时在线信任 `ssh-keyscan` 结果。可选 secrets 为 `ESSAY_DEPLOY_HOST`、`ESSAY_DEPLOY_USER`、`ESSAY_DEPLOY_DOMAIN`；缺省值分别是当前生产机、`root` 和 `songuu.top`。工作流只授予 `contents: read`。
+
+Actions 并发组负责串行化 GitHub 运行；生产机上的 `/opt/essay-manage/shared/deploy.lock` 通过 `flock` 继续覆盖 CI 和手工脚本，避免两种控制面同时切换应用或导入内容。
+
+内容同步失败或收到 `HUP`、`INT`、`TERM` 时，脚本会重新导入同步前 `content-current` 指向的快照并核对数据库 digest；第一次内容同步则回退到当前应用 release 内的内容。完整部署在 migrator 后失败时也执行相同的数据库补偿。旧内容恢复失败会明确以退出码 `90` 终止，不能把“同步失败”误报为“已经恢复”。
+
+两个手工生产入口都会拒绝未提交的待发布文件。历史 Markdown 字节不重写；扫描器和导入器在内存中把 CRLF/CR 规范化为 LF 后计算 hash 与写库，以保证 Windows 和 Ubuntu 对同一提交得到相同 descriptor。
+
+### 手工发布
+
 先预览完整动作，不产生本地构建、上传或远端变更：
 
 ```powershell
@@ -47,7 +68,7 @@ pwsh scripts/deploy-production.ps1
 默认流程如下：
 
 1. 检查共享环境文件、Docker/Compose/Nginx 命令和 `127.0.0.1:3200` 端口归属。
-2. 本地依次运行 `pnpm test`、`pnpm typecheck`、`pnpm build`。
+2. 生成并验证内容 manifest，再依次运行 `pnpm test`、`pnpm typecheck`、`pnpm build`。
 3. 本地执行 `docker compose config --quiet` 和 `docker compose build app`，构建单一镜像。
 4. 生成 release 包并校验其中没有 `.git`、`node_modules`、`.next` 或任何 `.env*` 文件。
 5. 将 release 与 `docker save` 生成的镜像包上传到 `/opt/essay-manage/releases/<timestamp>`；远端 `docker load` 后立即删除临时镜像包。

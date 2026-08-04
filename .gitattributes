@@ -1,0 +1,3 @@
+# Historical Markdown uses mixed EOL styles; preserve Git bytes and canonicalize in code.
+essay/*.md -text
+essay/**/*.md -text

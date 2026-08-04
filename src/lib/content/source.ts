@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import {
   type ArticleSource,
   buildArticleMetadata,
+  normalizeMarkdownContent,
 } from "./metadata";
 
 const execFileAsync = promisify(execFile);
@@ -68,10 +69,11 @@ export async function scanArticleSources(
 
   for (const absolutePath of files) {
     const sourcePath = path.relative(repositoryRoot, absolutePath).replaceAll("\\", "/");
-    const [contentMarkdown, dates] = await Promise.all([
+    const [rawMarkdown, dates] = await Promise.all([
       readFile(absolutePath, "utf8"),
       getGitDates(repositoryRoot, sourcePath),
     ]);
+    const contentMarkdown = normalizeMarkdownContent(rawMarkdown);
     const metadata = buildArticleMetadata({
       sourcePath,
       contentMarkdown,

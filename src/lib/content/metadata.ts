@@ -33,6 +33,10 @@ const CODE_FENCE = /```[\s\S]*?```/g;
 const CJK_CHARACTER = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
 const LATIN_WORD = /[\p{Letter}\p{Number}]+/gu;
 
+export function normalizeMarkdownContent(markdown: string): string {
+  return markdown.replace(/\r\n?/g, "\n");
+}
+
 function normalizePath(sourcePath: string): string {
   return sourcePath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
@@ -127,17 +131,18 @@ export function buildArticleMetadata({
   sourceUpdatedAt,
 }: BuildArticleMetadataInput): ArticleMetadata {
   const normalizedSourcePath = normalizePath(sourcePath);
+  const normalizedMarkdown = normalizeMarkdownContent(contentMarkdown);
   const fileName = path.posix.basename(normalizedSourcePath).replace(MARKDOWN_EXTENSION, "");
-  const { wordCount, readingMinutes } = countWords(contentMarkdown);
+  const { wordCount, readingMinutes } = countWords(normalizedMarkdown);
 
   return {
     sourcePath: normalizedSourcePath,
-    sourceHash: createHash("sha256").update(contentMarkdown).digest("hex"),
+    sourceHash: createHash("sha256").update(normalizedMarkdown).digest("hex"),
     slug: normalizeArticleSlug(normalizedSourcePath),
     title: fileName.trim(),
-    excerpt: createExcerpt(contentMarkdown),
+    excerpt: createExcerpt(normalizedMarkdown),
     collection: getCollection(normalizedSourcePath),
-    status: contentMarkdown.trim() ? "published" : "draft",
+    status: normalizedMarkdown.trim() ? "published" : "draft",
     publishedAt: new Date(publishedAt).toISOString(),
     sourceUpdatedAt: new Date(sourceUpdatedAt).toISOString(),
     wordCount,

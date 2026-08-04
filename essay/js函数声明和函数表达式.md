@@ -1,94 +1,48 @@
-### js中间的函数三种形式
-1.函数声明
-2.函数(赋值)表达式
-3.函数对象(Function)
+# 函数声明、函数表达式与箭头函数
 
-但是常用的还是前两种
+适用范围：组织业务函数、回调与对象方法；关键原则：根据是否需要动态 this、构造能力或命名调试信息选择形式，并用 const 固定函数绑定；当前代码示例：下面比较声明、命名表达式和箭头函数；常见误区/边界：箭头函数没有自己的 this、arguments 或构造能力，函数提升也不应成为控制流程工具；官方参考：[MDN 函数](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Guide/Functions)。
 
-**函数声明**
-```
-function foo() {}
-```
+函数声明适合模块级的具名行为；函数表达式适合把函数作为值传递；箭头函数适合简短回调和需要捕获外层 this 的场景。三者都能形成闭包，差异主要在绑定和调用语义。
 
-**函数(赋值)表达式**
-```
-let f = function() {}
-```
+## 三种常用写法
 
-以前面试的一个题
-```
-let f = function g() {}
-
-f() //ƒ g() {}
-
-g() //undefined
-```
-
-#### 在js函数的使用过程中间可能出现的问题很多(特别是函数的执行的顺序问题)
-> js解析函数分为两个阶段
-1.预编译阶段
-	1.此时处理函数的只是 声明式函数(函数声明)
-	2.变量也只是进行了声明但是没有进行初始化和赋值
-2.编译执行阶段
-	1.从上至下执行编译
-
-##### 下面是会出现的几种情况
-1.同时都是函数声明
-```
-g() //2
-
-function g() {console.log(1)}
-function g() {console.log(2)}
-```
-> 出现这种情况下，后面的覆盖前面的
-2.一个是函数声明，一个函数(赋值)表达式
-```
-g() //1
-
-function g() {console.log(1)}
-var g = function() {console.log(2)}
-```
-> 函数声明提前于函数赋值表达式
-
-```
-function g() {console.log(1)}
-var g = function() {console.log(2)}
-
-g() //2
-```
-> 上面的情况出现在开始调用和尾部调用，尾部调用就是函数赋值表达式覆盖函数函数声明，后面的覆盖前面的
-
-3.函数声明和变量声明
-```
-console.log(f);  // Function
-function f() {
-  console.log(1);
+~~~js
+function greet(name) {
+  return "你好，" + name;
 }
-var f = 3;
-```
->函数提升的优先级大于变量提升的优先级
 
-常见面试题:
-```
-f();
-var scope = 'out';
-function f() {
-  console.log(scope); //undefined
-  var scope = 'in';
-  console.log(scope); //'in'
-}
-console.log(scope); //'out'
-```
-上面的代码等价于:
-```
-var scope = 'out';
-function f() {
-  var scope;
-  console.log(scope);
-  scope = 'in';
-  console.log(scope);
-}
-f();
-console.log(scope);
-```
+const parseUser = function parseUser(value) {
+  return { id: String(value) };
+};
 
+const double = (value) => value * 2;
+
+console.log(greet("Ada"));
+console.log(parseUser(42));
+console.log(double(21));
+~~~
+
+命名函数表达式的名称可改善堆栈信息，并且只在函数自身作用域内可用。以 const 保存表达式或箭头函数可避免后续意外重赋值。
+
+## this 由函数形式与调用方式共同决定
+
+~~~js
+class Counter {
+  value = 0;
+
+  increment() {
+    this.value += 1;
+  }
+
+  scheduleIncrement() {
+    setTimeout(() => this.increment(), 0);
+  }
+}
+
+const counter = new Counter();
+counter.scheduleIncrement();
+~~~
+
+普通方法在以 object.method() 调用时会接收该对象作为 this。把方法单独传给回调会丢失这个调用者；上例的箭头回调捕获了 scheduleIncrement 的 this。若需要由调用方决定 this，使用普通 function 并在调用处以 bind、call 或正确的方法调用方式明确绑定。
+
+不要依赖声明提升来提前调用函数，也不要把箭头函数用于需要 new、动态 this 或 generator 的位置。可读的定义顺序和明确的参数、返回值通常比“最短写法”更重要。

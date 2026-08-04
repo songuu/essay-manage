@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import {
   buildArticleMetadata,
   createExcerpt,
   normalizeArticleSlug,
+  normalizeMarkdownContent,
 } from "../src/lib/content/metadata";
 
 test("中文路径生成稳定、可读且去除尾随空格的 slug", () => {
@@ -61,3 +63,31 @@ test("空 Markdown 作为草稿保留，非空 Markdown 才公开", () => {
   assert.match(published.sourceHash, /^[a-f0-9]{64}$/);
 });
 
+test("Markdown 换行在 Windows 与 Linux 上生成相同正文和 hash", () => {
+  const windowsMarkdown = "# 标题\r\n\r\n正文\r尾行\r\n";
+  const linuxMarkdown = "# 标题\n\n正文\n尾行\n";
+  const normalized = normalizeMarkdownContent(windowsMarkdown);
+
+  assert.equal(normalized, linuxMarkdown);
+
+  const dates = {
+    publishedAt: "2026-08-04T00:00:00.000Z",
+    sourceUpdatedAt: "2026-08-04T00:00:00.000Z",
+  };
+  const windowsMetadata = buildArticleMetadata({
+    sourcePath: "essay/cross-platform.md",
+    contentMarkdown: windowsMarkdown,
+    ...dates,
+  });
+  const linuxMetadata = buildArticleMetadata({
+    sourcePath: "essay/cross-platform.md",
+    contentMarkdown: linuxMarkdown,
+    ...dates,
+  });
+
+  assert.equal(windowsMetadata.sourceHash, linuxMetadata.sourceHash);
+  assert.equal(
+    windowsMetadata.sourceHash,
+    createHash("sha256").update(linuxMarkdown).digest("hex"),
+  );
+});

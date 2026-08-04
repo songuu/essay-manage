@@ -9,7 +9,7 @@ import {
   type ContentManifest,
 } from "../scripts/generate-content-manifest";
 
-test("metadata-only manifest 与 43 篇 Markdown 源保持一致", async () => {
+test("metadata-only manifest 与当前全部 Markdown 源保持一致", async () => {
   const repositoryRoot = process.cwd();
   const manifestPath = path.join(
     repositoryRoot,
@@ -22,14 +22,12 @@ test("metadata-only manifest 与 43 篇 Markdown 源保持一致", async () => {
   const expected = await createContentManifest(repositoryRoot, stored.generatedAt);
 
   assert.deepEqual(getComparableManifest(stored), getComparableManifest(expected));
-  assert.equal(stored.articles.length, 43);
-  assert.equal(
-    stored.articles.filter((article) => article.status === "published").length,
-    42,
-  );
-  assert.equal(
-    stored.articles.filter((article) => article.status === "draft").length,
-    1,
+  assert.ok(stored.articles.length > 0);
+  assert.equal(stored.articles.length, expected.articles.length);
+  assert.ok(
+    stored.articles.every(
+      (article) => article.status === "published" || article.status === "draft",
+    ),
   );
   assert.ok(
     stored.articles.every(

@@ -16,10 +16,13 @@
     "test:watch": "tsx --test --watch tests/**/*.test.ts tests/**/*.test.tsx",
     "content:manifest": "tsx scripts/generate-content-manifest.ts",
     "content:verify": "tsx scripts/generate-content-manifest.ts --check",
+    "content:sync:production": "pwsh scripts/sync-content-production.ps1",
     "db:migrate": "tsx scripts/migrate-database.ts",
     "db:import": "tsx scripts/import-markdown.ts",
     "db:deploy": "pnpm db:migrate && pnpm db:import",
-    "db:bundle": "esbuild scripts/deploy-database.ts --bundle --platform=node --format=esm --packages=bundle --outfile=dist/db-deploy.mjs"
+    "db:bundle": "esbuild scripts/deploy-database.ts --bundle --platform=node --format=esm --packages=bundle --outfile=dist/db-deploy.mjs",
+    "deploy:production": "pwsh scripts/deploy-production.ps1",
+    "deploy:dry-run": "pwsh scripts/deploy-production.ps1 -DryRun"
   },
   "dependencies": {
     "next": "16.2.12",

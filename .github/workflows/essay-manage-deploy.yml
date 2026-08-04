@@ -1,0 +1,199 @@
+name: Deploy Essay Manage
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Deployment mode; auto classifies changed paths
+        type: choice
+        required: true
+        default: auto
+        options:
+          - auto
+          - content
+          - full
+
+concurrency:
+  group: essay-manage-production
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Classify, verify, and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      NODE_VERSION: "24"
+      PNPM_VERSION: "10.28.2"
+      DEPLOY_HOST: ${{ secrets.ESSAY_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.ESSAY_DEPLOY_USER }}
+      DOMAIN: ${{ secrets.ESSAY_DEPLOY_DOMAIN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set deployment defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "DEPLOY_HOST=${DEPLOY_HOST:-47.253.230.197}" >> "$GITHUB_ENV"
+          echo "DEPLOY_USER=${DEPLOY_USER:-root}" >> "$GITHUB_ENV"
+          echo "DOMAIN=${DOMAIN:-songuu.top}" >> "$GITHUB_ENV"
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate content manifest
+        run: |
+          set -euo pipefail
+          pnpm content:manifest
+          pnpm content:verify
+
+      - name: Run quality gates
+        run: |
+          set -euo pipefail
+          pnpm test
+          pnpm lint
+          pnpm typecheck
+
+      - name: Validate deployment secret
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ESSAY_DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ESSAY_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::error::Missing required GitHub secret ESSAY_DEPLOY_SSH_PRIVATE_KEY"
+            exit 1
+          fi
+          if [ -z "$SSH_KNOWN_HOSTS" ]; then
+            echo "::error::Missing required GitHub secret ESSAY_DEPLOY_KNOWN_HOSTS"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ESSAY_DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ESSAY_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" true
+
+      - name: Select content sync or full deployment
+        shell: bash
+        env:
+          REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
+        run: |
+          set -euo pipefail
+          DEPLOYED_SHA=$(
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'set -eu
+              ROOT=/opt/essay-manage
+              target=$(readlink -f "$ROOT/current" 2>/dev/null || true)
+              case "$target" in "$ROOT/releases/"*) ;; *) exit 1 ;; esac
+              test -f "$target/.source-commit"
+              cat "$target/.source-commit"' 2>/dev/null || true
+          )
+
+          MODE=full
+          SAFE_CONTENT=0
+          if printf '%s' "$DEPLOYED_SHA" | grep -Eq '^[a-f0-9]{40}$' \
+            && git cat-file -e "${DEPLOYED_SHA}^{commit}" 2>/dev/null \
+            && git merge-base --is-ancestor "$DEPLOYED_SHA" "$GITHUB_SHA"; then
+            SAFE_CONTENT=1
+            mapfile -d '' changed_paths < <(git diff --name-only -z "$DEPLOYED_SHA" "$GITHUB_SHA")
+            for path in "${changed_paths[@]}"; do
+              case "$path" in
+                essay/*.md|content/article-manifest.json) ;;
+                *) SAFE_CONTENT=0; break ;;
+              esac
+            done
+          fi
+
+          case "$REQUESTED_MODE" in
+            full) MODE=full ;;
+            content)
+              if [ "$SAFE_CONTENT" != "1" ]; then
+                echo "::error::Content-only deployment is unsafe because production has undeployed code or an unknown source commit"
+                exit 1
+              fi
+              MODE=content
+              ;;
+            auto)
+              if [ "$SAFE_CONTENT" = "1" ]; then MODE=content; fi
+              ;;
+            *)
+              echo "::error::Unsupported deployment mode: $REQUESTED_MODE"
+              exit 1
+              ;;
+          esac
+
+          echo "MODE=$MODE" >> "$GITHUB_ENV"
+          echo "### Deployment classification" >> "$GITHUB_STEP_SUMMARY"
+          echo "- mode: $MODE" >> "$GITHUB_STEP_SUMMARY"
+          echo "- production code baseline: ${DEPLOYED_SHA:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- target commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Synchronize Markdown content
+        if: env.MODE == 'content'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pwsh ./scripts/sync-content-production.ps1 \
+            -DeployHost "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            -Domain "$DOMAIN" \
+            -ContentId "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -SourceCommit "$GITHUB_SHA" \
+            -SkipTests
+
+      - name: Build and deploy application
+        if: env.MODE == 'full'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pwsh ./scripts/deploy-production.ps1 \
+            -DeployHost "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            -Domain "$DOMAIN" \
+            -SourceCommit "$GITHUB_SHA" \
+            -SkipTests \
+            -SkipTypecheck \
+            -SkipLocalBuild
+
+      - name: Record deployment result
+        if: success()
+        run: |
+          echo "- public: https://${DOMAIN}/essay/" >> "$GITHUB_STEP_SUMMARY"
+          echo "- result: verified" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts

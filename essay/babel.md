@@ -1,14 +1,32 @@
-## Babel是在es6以及更高的es转换为es5语法   方便浏览器识别
+# Babel：按目标环境转换语法与补齐能力
 
-```
-@babel/core  AST转换的核心
-@babel/cli  打包工具
-@babel/plugin* Babel 插件机制，Babel基础功能不满足的时候,手动添加些
-@babel/preset-env*  把许多 @babel/plugin* 综合了下，减少配置
-@babel/polyfill 把浏览器某些不支持API，兼容性代码全部导入到项目,不管你是不是用到,缺点是代码体积特别大
-@babel/runtime 把你使用到的浏览器某些不支持API，按需导入,代码少
-```
+适用范围：需要支持不同浏览器或运行时的 JavaScript 项目；关键原则：先声明实际 targets，再让 preset-env 选择语法转换，API 兼容按使用情况和项目策略引入；当前代码示例：下面的 babel.config.json 只为支持的模块环境生成转换；常见误区/边界：语法转换不会自动实现缺失的 Web API，库代码也不应擅自污染宿主全局环境；官方参考：[Babel preset-env](https://babeljs.io/docs/babel-preset-env)。
 
-```
-Babel 只是转换 syntax 层语法,所有需要 @babel/polyfill 来处理API兼容,又因为 polyfill 体积太大，所以通过 preset的 useBuiltIns 来实现按需加载,再接着为了满足 npm 组件开发的需要 出现了 @babel/runtime 来做隔离
-```
+Babel 的核心工作是解析、转换并生成 JavaScript。是否需要转换 async、可选链或模块语法，取决于目标环境而不是源文件使用了哪一代语法。
+
+## 从目标浏览器开始配置
+
+~~~json
+{
+  "presets": [
+    [
+      "@babel/preset-env",
+      {
+        "targets": {
+          "esmodules": true
+        }
+      }
+    ]
+  ]
+}
+~~~
+
+targets 应来自产品明确支持的浏览器或运行时范围，并可由项目的 browserslist 统一维护。不要为并不需要的旧环境生成大量转换，也不要把构建工具本身的版本当成兼容性目标。
+
+上例按 Babel 8 编写：不要再声明 `bugfixes`。该选项是 Babel 7 中可显式开启的兼容性开关；在 Babel 8 中相应行为已成为默认策略，`bugfixes` 配置项已移除，不再需要也不应继续保留。若项目仍锁定 Babel 7，才可根据当时的 preset-env 文档在迁移前保留 `bugfixes: true`，升级到 Babel 8 时应移除它并重新验证产物。
+
+## 语法与 API 是两条链路
+
+Promise、URL、Intl 等是运行时 API；即使代码语法被转换，目标环境仍可能没有这些能力。应用可依据 targets 选择按使用处注入的兼容实现，并让锁文件管理对应依赖的准确版本。对库而言，应清楚声明宿主需要提供哪些 API，或使用不会修改全局对象的运行时帮助方案。
+
+每次调整 targets 或兼容策略后，都应在真实目标环境运行关键流程。Babel 配置不是“越多越安全”：过宽的支持范围会增加产物、测试矩阵和维护成本。
