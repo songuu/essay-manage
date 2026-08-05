@@ -7,13 +7,17 @@ import {
   describeDatabaseError,
 } from "../src/lib/db/client";
 
-interface MigrationFile {
+export interface MigrationChecksumRecord {
   version: string;
   checksum: string;
+  compatibleChecksums: ReadonlySet<string>;
+}
+
+interface MigrationFile extends MigrationChecksumRecord {
   sql: string;
 }
 
-interface AppliedMigrationRow {
+export interface AppliedMigrationRow {
   version: string;
   checksum: string;
 }
@@ -26,6 +30,56 @@ export interface MigrationResult {
 interface MigrateDatabaseOptions {
   databaseUrl?: string;
   repositoryRoot?: string;
+}
+
+export function normalizeMigrationSql(sql: string): string {
+  return sql.replace(/\r\n?/g, "\n");
+}
+
+function checksumSql(sql: string): string {
+  return createHash("sha256").update(sql).digest("hex");
+}
+
+export function getCompatibleMigrationChecksums(
+  sql: string,
+): ReadonlySet<string> {
+  const canonicalSql = normalizeMigrationSql(sql);
+  return new Set([
+    checksumSql(canonicalSql),
+    checksumSql(canonicalSql.replaceAll("\n", "\r\n")),
+    checksumSql(canonicalSql.replaceAll("\n", "\r")),
+  ]);
+}
+
+export async function reconcileAppliedMigrationChecksums(
+  appliedRows: readonly AppliedMigrationRow[],
+  migrations: readonly MigrationChecksumRecord[],
+  updateChecksum: (version: string, checksum: string) => Promise<void>,
+): Promise<void> {
+  const migrationByVersion = new Map(
+    migrations.map((migration) => [migration.version, migration]),
+  );
+
+  for (const applied of appliedRows) {
+    const localMigration = migrationByVersion.get(applied.version);
+
+    if (!localMigration) {
+      throw new Error(
+        `数据库存在本地缺失的已应用迁移: ${applied.version}`,
+      );
+    }
+
+    const appliedChecksum = applied.checksum.trim();
+    if (!localMigration.compatibleChecksums.has(appliedChecksum)) {
+      throw new Error(
+        `已应用迁移 checksum 漂移: ${applied.version}`,
+      );
+    }
+
+    if (localMigration.checksum !== appliedChecksum) {
+      await updateChecksum(applied.version, localMigration.checksum);
+    }
+  }
 }
 
 async function loadMigrations(repositoryRoot: string): Promise<MigrationFile[]> {
@@ -44,10 +98,15 @@ async function loadMigrations(repositoryRoot: string): Promise<MigrationFile[]> 
 
   return Promise.all(
     fileNames.map(async (fileName) => {
-      const sql = await readFile(path.join(migrationsDirectory, fileName), "utf8");
+      const sourceSql = await readFile(
+        path.join(migrationsDirectory, fileName),
+        "utf8",
+      );
+      const sql = normalizeMigrationSql(sourceSql);
       return {
         version: fileName.replace(/\.sql$/i, ""),
-        checksum: createHash("sha256").update(sql).digest("hex"),
+        checksum: checksumSql(sql),
+        compatibleChecksums: getCompatibleMigrationChecksums(sql),
         sql,
       };
     }),
@@ -84,25 +143,17 @@ export async function migrateDatabase(
         FROM schema_migrations
         ORDER BY version ASC
       `;
-      const migrationByVersion = new Map(
-        migrations.map((migration) => [migration.version, migration]),
+      await reconcileAppliedMigrationChecksums(
+        appliedRows,
+        migrations,
+        async (version, checksum) => {
+          await transaction`
+            UPDATE schema_migrations
+            SET checksum = ${checksum}
+            WHERE version = ${version}
+          `;
+        },
       );
-
-      for (const applied of appliedRows) {
-        const localMigration = migrationByVersion.get(applied.version);
-
-        if (!localMigration) {
-          throw new Error(
-            `数据库存在本地缺失的已应用迁移: ${applied.version}`,
-          );
-        }
-
-        if (localMigration.checksum !== applied.checksum.trim()) {
-          throw new Error(
-            `已应用迁移 checksum 漂移: ${applied.version}`,
-          );
-        }
-      }
 
       const appliedChecksums = new Map(
         appliedRows.map((migration) => [
