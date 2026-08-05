@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-08-05T01:09:51.976Z",
-  "sourceCommit": "8e7e914114afb62a017543f70b3b1c6e6cd833df",
+  "generatedAt": "2026-08-05T07:59:54.323Z",
+  "sourceCommit": "d3e5067dc09ade840fde9626c63941317b5299e8",
   "articles": [
     {
       "sourcePath": "essay/惰性求值.md",
@@ -15,6 +15,19 @@
       "sourceUpdatedAt": "2026-08-04T08:58:11.000Z",
       "wordCount": 475,
       "readingMinutes": 2
+    },
+    {
+      "sourcePath": "essay/灰度/集群灰度.md",
+      "sourceHash": "7d1edee04ddd755411721c8c33bddb0fe73c2d57cc3d81cf16e38665812dc52b",
+      "slug": "灰度--集群灰度",
+      "title": "集群灰度",
+      "excerpt": "可以。生产方案建议正式定为：",
+      "collection": "灰度",
+      "status": "published",
+      "publishedAt": "2026-08-05T07:36:19.000Z",
+      "sourceUpdatedAt": "2026-08-05T07:36:19.000Z",
+      "wordCount": 3428,
+      "readingMinutes": 13
     },
     {
       "sourcePath": "essay/简单的mongoDB应用.md",

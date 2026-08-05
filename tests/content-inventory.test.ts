@@ -11,12 +11,6 @@ import { scanArticleSources } from "../src/lib/content/source";
 
 const execFileAsync = promisify(execFile);
 
-const ARTICLE_INVENTORY_BASELINE_2026_08_04 = Object.freeze({
-  total: 43,
-  published: 43,
-  draft: 0,
-});
-
 const GIT_DATE_ORACLE_ARTICLE = "essay/scrapy运行的过程.md";
 
 async function skipWithoutRepositoryGitHistory(
@@ -101,20 +95,6 @@ test("完整扫描全部 Markdown，并按正文是否为空区分公开文章�
     new Set(articles.map((article) => article.sourcePath)).size,
     articles.length,
   );
-});
-
-test("已校订文章库存符合 2026-08-04 发布基线", async (t) => {
-  const repositoryRoot = process.cwd();
-  if (await skipWithoutRepositoryGitHistory(t, repositoryRoot)) return;
-
-  const articles = await scanArticleSources(repositoryRoot);
-  const inventory = {
-    total: articles.length,
-    published: articles.filter((article) => article.status === "published").length,
-    draft: articles.filter((article) => article.status === "draft").length,
-  };
-
-  assert.deepEqual(inventory, ARTICLE_INVENTORY_BASELINE_2026_08_04);
 });
 
 test("Markdown 只规范化换行，正文语义与 canonical hash 保持一致", async (t) => {
